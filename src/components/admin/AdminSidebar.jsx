@@ -269,7 +269,7 @@ export default function AdminSidebar({
 
             {/* Public Live Website Shortcut */}
             <a
-              href="/"
+              href={import.meta.env.VITE_LIVE_WEBSITE_URL || 'https://yovexa-solutions.vercel.app'}
               target="_blank"
               rel="noopener noreferrer"
               title={!isEffectiveExpanded ? 'View Live Website' : undefined}
