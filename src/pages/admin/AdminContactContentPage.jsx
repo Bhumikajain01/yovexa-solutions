@@ -18,13 +18,7 @@ export default function AdminContactContentPage() {
     workingHours: '',
     heading: '',
     description: '',
-    budgetOptions: [
-      "Under ₹25,000",
-      "₹25,000 – ₹50,000",
-      "₹50,000 – ₹1,00,000",
-      "₹1,00,000+",
-      "Not Sure Yet"
-    ],
+    budgetOptions: [],
   });
 
   useEffect(() => {
@@ -36,9 +30,7 @@ export default function AdminContactContentPage() {
           setFormData(prev => ({
             ...prev,
             ...data,
-            budgetOptions: Array.isArray(data.budgetOptions) && data.budgetOptions.length > 0
-              ? data.budgetOptions
-              : prev.budgetOptions,
+            budgetOptions: Array.isArray(data.budgetOptions) ? data.budgetOptions : [],
           }));
         }
       } catch (err) {

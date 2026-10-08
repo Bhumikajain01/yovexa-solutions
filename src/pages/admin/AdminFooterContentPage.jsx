@@ -33,7 +33,7 @@ export default function AdminFooterContentPage() {
   const [formData, setFormData] = useState(EMPTY_FORM);
 
   useEffect(() => {
-    siteSettingsService.getSettings()
+    siteSettingsService.getAdminSettings()
       .then(data => {
         if (data) {
           setFormData({
@@ -43,8 +43,8 @@ export default function AdminFooterContentPage() {
             location:          data.location          || '',
             address:           data.address           || '',
             workingHours:      data.workingHours      || '',
-            footerDescription: data.footerDescription || '',
-            copyrightText:     data.copyrightText     || '',
+            footerDescription: data.footerDescription || data.description || '',
+            copyrightText:     data.copyrightText     || data.copyright || '',
             linkedin:          data.linkedin          || '',
             github:            data.github            || '',
             instagram:         data.instagram         || '',

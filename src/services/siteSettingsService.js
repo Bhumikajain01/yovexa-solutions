@@ -1,4 +1,4 @@
-import { api, extractData } from './api';
+﻿import { api, extractData } from './api';
 
 /**
  * Maps the flat social URL fields returned by the backend
@@ -24,7 +24,7 @@ function buildSocialsArray(data) {
 export const siteSettingsService = {
   /**
    * Fetches the public site-settings singleton and returns it with a
-   * pre-built `socials` array so callers don't need to know the shape
+   * pre-built socials array so callers don't need to know the shape
    * of the raw backend response.
    *
    * @returns {Promise<object|null>}
@@ -43,14 +43,45 @@ export const siteSettingsService = {
         whatsapp: data.whatsapp || '',
         address: data.address || '',
         workingHours: data.workingHours || '',
-        description: data.footerDescription || '',
-        copyright: data.copyrightText || '',
-        // Derived socials array — only platforms with a URL set in admin
+        description: data.footerDescription || data.description || '',
+        footerDescription: data.footerDescription || data.description || '',
+        copyright: data.copyrightText || data.copyright || '',
+        copyrightText: data.copyrightText || data.copyright || '',
+        // Derived socials array - only platforms with a URL set in admin
         socials: buildSocialsArray(data),
       };
     } catch (err) {
       console.error('Failed to fetch site settings:', err);
       return null;
+    }
+  },
+
+  /**
+   * Fetches current settings via the authenticated admin endpoint
+   * (guaranteed fresh, non-cached) for admin form population.
+   */
+  async getAdminSettings() {
+    try {
+      const res = await api.get('/admin/site-settings');
+      const data = extractData(res);
+      if (!data) return null;
+      return {
+        ...data,
+        email: data.contactEmail || '',
+        location: data.location || '',
+        phone: data.phone || '',
+        whatsapp: data.whatsapp || '',
+        address: data.address || '',
+        workingHours: data.workingHours || '',
+        description: data.footerDescription || data.description || '',
+        footerDescription: data.footerDescription || data.description || '',
+        copyright: data.copyrightText || data.copyright || '',
+        copyrightText: data.copyrightText || data.copyright || '',
+        socials: buildSocialsArray(data),
+      };
+    } catch (err) {
+      console.error('Failed to fetch admin site settings, falling back to public settings:', err);
+      return this.getSettings();
     }
   },
 };

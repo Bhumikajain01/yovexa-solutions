@@ -1,54 +1,104 @@
 import { api, extractData } from './api';
-
-const TOKEN_KEY = 'yovexa_auth_token';
-const USER_KEY = 'yovexa_auth_user';
+import { tokenManager } from './tokenManager';
 
 export const authService = {
+  /**
+   * Register initial admin account
+   */
   async register(data) {
     const res = await api.post('/auth/register', data);
     return extractData(res);
   },
 
+  /**
+   * Authenticate admin credentials and persist session tokens
+   */
   async login(email, password) {
     const res = await api.post('/auth/login', { email, password });
     const data = extractData(res);
 
     if (data && data.token && data.user) {
-      localStorage.setItem(TOKEN_KEY, data.token);
-      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+      tokenManager.setSession({
+        token: data.token,
+        refreshToken: data.refreshToken,
+        expiresIn: data.expiresIn,
+        user: data.user,
+      });
       return data;
     }
-    throw new Error(res?.message || 'Invalid login response');
+    throw new Error(res?.message || 'Invalid login response received from server.');
   },
 
+  /**
+   * Manually or proactively trigger JWT refresh using stored refresh token
+   */
+  async refreshToken() {
+    const refreshToken = tokenManager.getRefreshToken();
+    if (!refreshToken) {
+      throw new Error('No refresh token available to renew session.');
+    }
+
+    const res = await api.post('/auth/refresh', { refreshToken });
+    const data = extractData(res);
+
+    if (data && data.token) {
+      tokenManager.setSession({
+        token: data.token,
+        refreshToken: data.refreshToken || refreshToken,
+        expiresIn: data.expiresIn,
+      });
+      return data;
+    }
+    throw new Error(res?.message || 'Failed to refresh authentication session.');
+  },
+
+  /**
+   * Revoke refresh token on backend and wipe local storage session
+   */
   async logout() {
+    const refreshToken = tokenManager.getRefreshToken();
     try {
-      await api.post('/auth/logout');
-    } catch {
-      // Ignore network errors on logout
+      if (refreshToken) {
+        await api.post('/auth/logout', { refreshToken });
+      } else {
+        await api.post('/auth/logout');
+      }
+    } catch (err) {
+      // Ignore network errors during logout to guarantee client-side cleanup
+      console.warn('Backend logout notification failed, continuing local cleanup:', err);
     } finally {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
+      tokenManager.clearSession();
     }
   },
 
+  /**
+   * Accessor methods
+   */
   getStoredToken() {
-    return localStorage.getItem(TOKEN_KEY);
+    return tokenManager.getAccessToken();
+  },
+
+  getStoredRefreshToken() {
+    return tokenManager.getRefreshToken();
   },
 
   getStoredUser() {
-    const userStr = localStorage.getItem(USER_KEY);
-    if (!userStr) return null;
-    try {
-      return JSON.parse(userStr);
-    } catch {
-      return null;
-    }
+    return tokenManager.getUser();
+  },
+
+  getTokenExpiresAt() {
+    return tokenManager.getExpiresAt();
+  },
+
+  isTokenExpired(bufferSeconds = 30) {
+    return tokenManager.isAccessTokenExpired(bufferSeconds);
   },
 
   isAuthenticated() {
-    const token = this.getStoredToken();
-    const user = this.getStoredUser();
+    const token = tokenManager.getAccessToken();
+    const user = tokenManager.getUser();
     return !!(token && user && user.role === 'ADMIN');
   },
 };
+
+export default authService;

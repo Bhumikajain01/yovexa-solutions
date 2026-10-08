@@ -1,13 +1,92 @@
 /**
- * Generic API Client with JWT Header attachment, URL Normalization & Response Unwrapping
+ * Generic API Client with JWT Header attachment, Refresh Token Rotation Interceptor,
+ * URL Normalization & Response Unwrapping.
  */
+import { tokenManager } from './tokenManager';
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://yovexa-solutions-backend.vercel.app/api';
 
 /**
- * Normalizes URL and attaches JWT authentication headers
+ * Normalizes URL and handles relative vs absolute endpoints
+ */
+export function getCleanUrl(endpoint) {
+  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  if (cleanEndpoint.startsWith('http://') || cleanEndpoint.startsWith('https://')) {
+    return cleanEndpoint;
+  }
+  const cleanBase = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+  if (cleanBase.endsWith('/api') && cleanEndpoint.startsWith('/api/')) {
+    cleanEndpoint = cleanEndpoint.replace(/^\/api/, '');
+  }
+  return `${cleanBase}${cleanEndpoint}`;
+}
+
+// Single-flight refresh token mutex promise to avoid race condition rotations
+let refreshPromise = null;
+
+/**
+ * Directly executes a token refresh with the backend without triggering 401 interceptor loops
+ */
+async function executeTokenRefresh() {
+  const refreshToken = tokenManager.getRefreshToken();
+  const refreshUrl = getCleanUrl('/auth/refresh');
+
+  const response = await fetch(refreshUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(refreshToken ? { refreshToken } : {}),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.message || 'Session expired. Please log in again.';
+    throw new Error(message);
+  }
+
+  const resJson = await response.json();
+  const data = resJson.data || resJson;
+
+  if (!data || !data.token) {
+    throw new Error('Malformed token refresh response received from server.');
+  }
+
+  // Update stored tokens with new access token and rotated refresh token
+  tokenManager.setSession({
+    token: data.token,
+    refreshToken: data.refreshToken || refreshToken,
+    expiresIn: data.expiresIn,
+  });
+
+  return data.token;
+}
+
+/**
+ * Returns existing in-flight refresh promise or initiates a new one
+ */
+function getRefreshedToken() {
+  if (!refreshPromise) {
+    refreshPromise = executeTokenRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+/**
+ * Normalizes URL and attaches JWT authentication headers.
+ * Intercepts 401 Unauthorized responses to perform automatic token refresh and retry.
  */
 export async function apiRequest(endpoint, options = {}) {
-  const token = localStorage.getItem('yovexa_auth_token');
+  const isAuthEndpoint =
+    endpoint.includes('/auth/login') ||
+    endpoint.includes('/auth/register') ||
+    endpoint.includes('/auth/refresh') ||
+    endpoint.includes('/auth/logout');
+
+  const token = tokenManager.getAccessToken();
 
   const headers = {
     'Content-Type': 'application/json',
@@ -20,30 +99,58 @@ export async function apiRequest(endpoint, options = {}) {
     delete headers['Content-Type'];
   }
 
-  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  let url;
-  if (cleanEndpoint.startsWith('http://') || cleanEndpoint.startsWith('https://')) {
-    url = cleanEndpoint;
-  } else {
-    const cleanBase = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
-    if (cleanBase.endsWith('/api') && cleanEndpoint.startsWith('/api/')) {
-      cleanEndpoint = cleanEndpoint.replace(/^\/api/, '');
-    }
-    url = `${cleanBase}${cleanEndpoint}`;
-  }
+  const url = getCleanUrl(endpoint);
+
+  const fetchOptions = {
+    ...options,
+    headers,
+    credentials: options.credentials || 'include',
+  };
 
   try {
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    const response = await fetch(url, fetchOptions);
 
+    // Automatic Token Refresh Interceptor on 401 Unauthorized
     if (response.status === 401) {
-      // Unauthorized or expired token
-      localStorage.removeItem('yovexa_auth_token');
-      localStorage.removeItem('yovexa_auth_user');
-      if (window.location.pathname.startsWith('/admin')) {
-        window.location.href = '/login';
+      if (!options._retry && !isAuthEndpoint) {
+        if (tokenManager.hasRefreshToken()) {
+          try {
+            const newToken = await getRefreshedToken();
+
+            const retryHeaders = {
+              ...headers,
+              Authorization: `Bearer ${newToken}`,
+            };
+            if (options.body instanceof FormData) {
+              delete retryHeaders['Content-Type'];
+            }
+
+            return await apiRequest(endpoint, {
+              ...options,
+              _retry: true,
+              headers: retryHeaders,
+            });
+          } catch (refreshErr) {
+            console.warn('Authentication refresh failed:', refreshErr.message);
+            tokenManager.clearSession();
+            if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+              window.location.href = '/login';
+            }
+            throw refreshErr;
+          }
+        } else {
+          // No refresh token available, session expired
+          tokenManager.clearSession();
+          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+            window.location.href = '/login';
+          }
+        }
+      } else if (isAuthEndpoint && endpoint.includes('/auth/refresh')) {
+        // Direct refresh call returned 401
+        tokenManager.clearSession();
+        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+          window.location.href = '/login';
+        }
       }
     }
 
